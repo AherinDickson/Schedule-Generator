@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quarterly Schedule Generator (New)</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Avenue Volunteer Schedule Generator</h1>
+            <p class="subtitle">Blockout dates (exact Sunday) and minimum weeks between assignments (leads / fill)</p>
+        </header>
+
+        <main>
+            <section class="upload-section">
+                <h2>Step 1: Upload Volunteer List</h2>
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="fileInput" accept=".txt,.csv" hidden>
+                    <div class="upload-content">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p>Click to upload or drag and drop</p>
+                        <p class="file-hint">Pipe-delimited .txt or comma-delimited .csv file (format: Q[Quarter][Year]_VolunteerList)</p>
+                    </div>
+                </div>
+                <div id="fileInfo" class="file-info hidden"></div>
+            </section>
+
+            <section class="settings-section">
+                <h2>Step 2: Configure Schedule Settings</h2>
+                <div class="settings-grid">
+                    <div class="setting-group">
+                        <label for="quarter">Quarter:</label>
+                        <select id="quarter" required>
+                            <option value="Q1">Q1 (January - March)</option>
+                            <option value="Q2">Q2 (April - June)</option>
+                            <option value="Q3">Q3 (July - September)</option>
+                            <option value="Q4">Q4 (October - December)</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="year">Year:</label>
+                        <input type="number" id="year" min="2020" max="2100" value="2026" required>
+                    </div>
+                </div>
+                <div id="skipWeeksPanel" class="skip-weeks-panel">
+                    <h3 class="skip-weeks-heading">Sundays without volunteers</h3>
+                    <p class="file-hint skip-weeks-intro">Check any Sunday when no volunteers are needed. That row still appears on the schedule (greyed out). Minimum-gap rules still use real calendar weeks between assignment dates.</p>
+                    <div class="skip-weeks-actions">
+                        <button type="button" id="skipWeeksSelectAll" class="btn btn-secondary btn-sm">Select all</button>
+                        <button type="button" id="skipWeeksClearAll" class="btn btn-secondary btn-sm">Clear all</button>
+                    </div>
+                    <div id="skipWeeksList" class="skip-weeks-list" role="group" aria-label="Skip staffing for these Sundays"></div>
+                </div>
+                <div class="info-box">
+                    <h3>Positions Per Sunday (15 total):</h3>
+                    <ul>
+                        <li>Check-In Coordinator: 1</li>
+                        <li>Crawler: 3</li>
+                        <li>Toddler 1: 2</li>
+                        <li>Toddler 2 Lead: 1</li>
+                        <li>Toddler 2: 2</li>
+                        <li>Pre-K 1 Lead: 1</li>
+                        <li>Pre-K 1: 2</li>
+                        <li>Pre-K 2 Lead: 1</li>
+                        <li>Pre-K 2: 2</li>
+                    </ul>
+                    <p class="file-hint" style="margin-top: 0.75rem;">Optional columns: Pre-K 1 Lead, Pre-K 2 Lead (pipe-delimited). Legacy &quot;Pre-K Lead&quot; counts as both.</p>
+                    <p class="file-hint" style="margin-top: 0.75rem;">Blockout/blackout column: that Sunday only (adjacent Sundays stay eligible). Future-dated assignments from the file still apply unless that Sunday is blocked out.</p>
+                </div>
+            </section>
+
+            <section class="generate-section">
+                <h2>Step 3: Generate Schedule</h2>
+                <button id="generateBtn" class="btn btn-primary" disabled>Generate Quarterly Schedule</button>
+                <div id="loadingSpinner" class="spinner hidden"></div>
+            </section>
+
+            <section class="schedule-section hidden" id="scheduleSection">
+                <h2>Generated Schedule</h2>
+                <div class="schedule-actions">
+                    <button id="exportCSVBtn" class="btn btn-secondary">Export to CSV</button>
+                    <button id="exportJSONBtn" class="btn btn-secondary">Export to JSON</button>
+                    <button id="printBtn" class="btn btn-secondary">Print Schedule</button>
+                </div>
+                <div id="scheduleOutput"></div>
+            </section>
+
+            <section class="statistics-section hidden" id="statisticsSection">
+                <h2>Schedule Statistics</h2>
+                <div id="statisticsOutput"></div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Quarterly Schedule Generator — New</p>
+        </footer>
+    </div>
+
+    <script src="scheduler.js"></script>
+</body>
+</html>
