@@ -1,0 +1,4 @@
+# Keep volunteer/personal data out of the repo.
+# Ignore everything in this folder except this .gitignore file.
+*
+!.gitignore

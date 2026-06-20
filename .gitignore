@@ -1,8 +1,4 @@
-# Volunteer / personal data files — kept out of the repo
-*.csv
-Volunteer Data for Schedule.txt
-Q22026_VolunteerList.txt
-Q22026_VolunteerList_date_weekday_audit.txt
+# Volunteer/personal data lives in "Volunteer Data/" and is ignored there.
 
 # OS / editor cruft
 .DS_Store
