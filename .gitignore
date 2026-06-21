@@ -1,4 +1,6 @@
-# Volunteer/personal data lives in "Volunteer Data/" and is ignored there.
+# Ignore the entire "Volunteer Data" folder — it holds volunteer/personal
+# data (names, CSVs, audit files) that should never be pushed to GitHub.
+Volunteer Data/
 
 # OS / editor cruft
 .DS_Store
