@@ -50,6 +50,30 @@ class QuarterlyScheduler {
         return keys;
     }
 
+    countRequiredSlotBlanks(schedule) {
+        const listCaps = [
+            ['crawlers', 3],
+            ['toddler1', 2],
+            ['toddler2', 2],
+            ['preK1', 2],
+            ['preK2', 2]
+        ];
+        const leadKeys = ['checkInCoordinator', 'toddler2LeadTeacher', 'preK1LeadTeacher', 'preK2LeadTeacher'];
+        let blanks = 0;
+        (schedule || []).forEach((entry) => {
+            if (entry.skipStaffing) return;
+            const p = entry.positions || {};
+            leadKeys.forEach((key) => {
+                if (!p[key]) blanks++;
+            });
+            listCaps.forEach(([key, cap]) => {
+                const filled = Array.isArray(p[key]) ? p[key].filter((n) => n).length : 0;
+                blanks += Math.max(0, cap - filled);
+            });
+        });
+        return blanks;
+    }
+
     scoreScheduleData(data) {
         const schedule = data.schedule || [];
         const usage = data.volunteerUsage || {};
@@ -62,9 +86,9 @@ class QuarterlyScheduler {
         const unusedCount = usageCounts.filter((c) => c === 0).length;
         const fourPlusCount = usageCounts.filter((c) => c >= 4).length;
         const gapViolationCount = Object.keys(violations.insufficientGaps || {}).length;
+        const blankCount = this.countRequiredSlotBlanks(schedule);
 
-        // DEV-like violation component with an additional unused-volunteer penalty.
-        const violationCount = fourPlusCount + gapViolationCount + unusedCount;
+        const violationCount = fourPlusCount + gapViolationCount + unusedCount + blankCount;
         const violationScore = Math.max(0, 100 - violationCount * 8);
 
         // DEV-like fairness: variance among used volunteers.
@@ -144,7 +168,8 @@ class QuarterlyScheduler {
             violationCount,
             unusedCount,
             fourPlusCount,
-            gapViolationCount
+            gapViolationCount,
+            blankCount
         };
     }
 
@@ -1267,21 +1292,6 @@ class QuarterlyScheduler {
         const cycleArgs = [toddler2Cycle, preK1Cycle, preK2Cycle];
         void cycleArgs;
 
-        const leadSlots = [];
-        this.schedule.forEach((scheduleEntry, entryIndex) => {
-            if (scheduleEntry.skipStaffing) return;
-            if (!scheduleEntry.positions.toddler2LeadTeacher) {
-                leadSlots.push({ entryIndex, key: 'toddler2LeadTeacher', order: toddler2Order });
-            }
-            if (!scheduleEntry.positions.preK1LeadTeacher) {
-                leadSlots.push({ entryIndex, key: 'preK1LeadTeacher', order: preK1Order });
-            }
-            if (!scheduleEntry.positions.preK2LeadTeacher) {
-                leadSlots.push({ entryIndex, key: 'preK2LeadTeacher', order: preK2Order });
-            }
-        });
-        if (leadSlots.length === 0) return;
-
         const orderIndexByName = {};
         [toddler2Order, preK1Order, preK2Order].forEach((order) => {
             order.forEach((vol, idx) => {
@@ -1289,99 +1299,97 @@ class QuarterlyScheduler {
             });
         });
 
-        const snapshotState = () => ({
-            schedule: JSON.parse(JSON.stringify(this.schedule)),
-            volunteerUsage: JSON.parse(JSON.stringify(this.volunteerUsage))
-        });
-        const restoreState = (snapshot) => {
-            this.schedule = (snapshot.schedule || []).map((entry) => ({
-                ...entry,
-                date: new Date(entry.date)
-            }));
-            this.volunteerUsage = {};
-            Object.entries(snapshot.volunteerUsage || {}).forEach(([name, usage]) => {
-                this.volunteerUsage[name] = {
-                    ...usage,
-                    dates: (usage.dates || []).map((d) => new Date(d))
-                };
-            });
-        };
-
-        const countLeadBlanks = () => {
-            let blanks = 0;
-            this.schedule.forEach((entry) => {
-                if (entry.skipStaffing) return;
-                if (!entry.positions.toddler2LeadTeacher) blanks++;
-                if (!entry.positions.preK1LeadTeacher) blanks++;
-                if (!entry.positions.preK2LeadTeacher) blanks++;
-            });
-            return blanks;
-        };
-
-        const getEligible = (slot, minGapWeeks) => {
-            const entry = this.schedule[slot.entryIndex];
-            if (!entry || entry.positions[slot.key]) return [];
-            const eligible = [];
-            for (const v of slot.order) {
-                if (
-                    !this.isVolunteerNameOnEntry(v.name, entry) &&
-                    (!v.spouse || this.canSpouseBeScheduledOnDate(v.spouse, entry, null, null, minGapWeeks)) &&
-                    this.canPlaceVolunteerOnDate(v, entry.date, {
-                        purpose: 'algorithm',
-                        minGapWeeks
-                    })
-                ) {
-                    eligible.push(v);
-                }
+        const preKPool = [];
+        const seenPreK = new Set();
+        [...preK1Order, ...preK2Order].forEach((vol) => {
+            if (!seenPreK.has(vol.name)) {
+                seenPreK.add(vol.name);
+                preKPool.push(vol);
             }
-            return eligible;
+        });
+
+        const weeksRestBefore = (volunteer, date) => {
+            let last = null;
+            const consider = (d) => {
+                if (!d) return;
+                const n = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                const c = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+                if (n.getTime() >= c.getTime()) return;
+                if (!last || n > last) last = n;
+            };
+            (volunteer.previouslyScheduledDates || []).forEach(consider);
+            (volunteer.futureScheduledDates || []).forEach((f) => consider(f.date));
+            (this.volunteerUsage[volunteer.name]?.dates || []).forEach(consider);
+            if (!last) return Number.POSITIVE_INFINITY;
+            return this.weeksBetween(last, date);
         };
 
-        const getSlotOptions = (slot) => {
-            const strict = getEligible(slot, this.minSchedulingGapWeeks).map((v) => ({
-                volunteer: v,
-                minGapWeeks: this.minSchedulingGapWeeks
-            }));
-            if (strict.length > 0) return strict;
-            return getEligible(slot, relaxedGapWeeks).map((v) => ({
-                volunteer: v,
-                minGapWeeks: relaxedGapWeeks
-            }));
+        const spouseGapForRest = (restWeeks) => {
+            if (!Number.isFinite(restWeeks) || restWeeks > this.minSchedulingGapWeeks) {
+                return this.minSchedulingGapWeeks;
+            }
+            if (restWeeks > relaxedGapWeeks) return relaxedGapWeeks;
+            return 0;
         };
 
-        const rankOptions = (options) => {
-            const ranked = options.map((opt) => {
-                const usage = this.volunteerUsage[opt.volunteer.name] || { count: 0 };
-                return {
-                    ...opt,
-                    usageCount: usage.count,
-                    orderIdx: Number.isFinite(orderIndexByName[opt.volunteer.name])
-                        ? orderIndexByName[opt.volunteer.name]
-                        : Number.MAX_SAFE_INTEGER
-                };
-            });
-            ranked.sort((a, b) => {
-                if (a.usageCount !== b.usageCount) return a.usageCount - b.usageCount;
-                return a.orderIdx - b.orderIdx;
-            });
-            return ranked;
+        const restTier = (restWeeks) => {
+            if (!Number.isFinite(restWeeks) || restWeeks > this.minSchedulingGapWeeks) return 0;
+            if (restWeeks > relaxedGapWeeks) return 1;
+            return 2;
+        };
+
+        const rankPool = (pool, entry) => {
+            return pool
+                .filter((vol) =>
+                    !this.isVolunteerNameOnEntry(vol.name, entry) &&
+                    !this.isExplicitBlockout(vol, entry.date)
+                )
+                .map((vol) => {
+                    const restWeeks = weeksRestBefore(vol, entry.date);
+                    const usage = this.volunteerUsage[vol.name] || { count: 0 };
+                    return {
+                        volunteer: vol,
+                        restWeeks,
+                        usageCount: usage.count,
+                        minGapWeeks: spouseGapForRest(restWeeks),
+                        orderIdx: Number.isFinite(orderIndexByName[vol.name])
+                            ? orderIndexByName[vol.name]
+                            : Number.MAX_SAFE_INTEGER
+                    };
+                })
+                .sort((a, b) => {
+                    const tierA = restTier(a.restWeeks);
+                    const tierB = restTier(b.restWeeks);
+                    if (tierA !== tierB) return tierA - tierB;
+                    const restA = Number.isFinite(a.restWeeks) ? a.restWeeks : Number.MAX_SAFE_INTEGER;
+                    const restB = Number.isFinite(b.restWeeks) ? b.restWeeks : Number.MAX_SAFE_INTEGER;
+                    if (restA !== restB) return restB - restA;
+                    if (a.usageCount !== b.usageCount) return a.usageCount - b.usageCount;
+                    return a.orderIdx - b.orderIdx;
+                });
         };
 
         const applyOption = (slot, option) => {
             const entry = this.schedule[slot.entryIndex];
             if (!entry || entry.positions[slot.key]) return false;
             const pick = option.volunteer;
+            if (this.isVolunteerNameOnEntry(pick.name, entry)) return false;
+            if (this.isExplicitBlockout(pick, entry.date)) return false;
+            const spouseGap = Number.isFinite(option.minGapWeeks) ? option.minGapWeeks : 0;
+            if (pick.spouse && !this.canSpouseBeScheduledOnDate(pick.spouse, entry, null, slot.key, spouseGap)) {
+                if (spouseGap > 0 && !this.canSpouseBeScheduledOnDate(pick.spouse, entry, null, slot.key, 0)) {
+                    return false;
+                }
+                if (spouseGap === 0) return false;
+            }
             entry.positions[slot.key] = pick.name;
             this.recordVolunteerUsage(pick.name, entry.date);
             if (pick.spouse) {
-                const spousePlaced = this.scheduleSpouseOnSameDateStrict(
-                    pick.spouse,
-                    entry,
-                    null,
-                    slot.key,
-                    option.minGapWeeks
-                );
-                if (!spousePlaced) {
+                const placed =
+                    this.scheduleSpouseOnSameDateStrict(pick.spouse, entry, null, slot.key, spouseGap) ||
+                    (spouseGap > 0 &&
+                        this.scheduleSpouseOnSameDateStrict(pick.spouse, entry, null, slot.key, 0));
+                if (!placed) {
                     this.removeVolunteerUsage(pick.name, entry.date);
                     entry.positions[slot.key] = null;
                     return false;
@@ -1390,65 +1398,30 @@ class QuarterlyScheduler {
             return true;
         };
 
-        const allSlotIds = leadSlots.map((_, idx) => idx);
-        const cfg = {
-            maxNodes: 800,
-            branchLimitPerSlot: 4
-        };
-        let exploredNodes = 0;
-        let bestBlankCount = countLeadBlanks();
-        let bestSnapshot = snapshotState();
-
-        const chooseMostConstrainedSlot = (remainingIds) => {
-            let selected = null;
-            for (const id of remainingIds) {
-                const slot = leadSlots[id];
-                const entry = this.schedule[slot.entryIndex];
-                if (!entry || entry.positions[slot.key]) continue;
-                const options = getSlotOptions(slot);
-                if (!selected || options.length < selected.options.length) {
-                    selected = { id, options };
-                    if (options.length === 0) break;
-                }
-            }
-            return selected;
-        };
-
-        const search = (remainingIds) => {
-            exploredNodes++;
-            if (exploredNodes > cfg.maxNodes) return false;
-            if (remainingIds.length === 0) return true;
-
-            const blanksNow = countLeadBlanks();
-            if (blanksNow < bestBlankCount) {
-                bestBlankCount = blanksNow;
-                bestSnapshot = snapshotState();
-            }
-
-            const chosen = chooseMostConstrainedSlot(remainingIds);
-            if (!chosen) return true;
-            if (chosen.options.length === 0) return false;
-
-            const nextRemaining = remainingIds.filter((id) => id !== chosen.id);
-            const options = rankOptions(chosen.options).slice(0, cfg.branchLimitPerSlot);
+        const fillSlotFromOptions = (entryIndex, key, options) => {
+            const slot = { entryIndex, key };
             for (const option of options) {
-                const before = snapshotState();
-                const slot = leadSlots[chosen.id];
-                const assigned = applyOption(slot, option);
-                if (!assigned) {
-                    restoreState(before);
-                    continue;
-                }
-                if (search(nextRemaining)) return true;
-                restoreState(before);
+                if (applyOption(slot, option)) return;
             }
-            return false;
         };
 
-        const solved = search(allSlotIds);
-        if (!solved && bestSnapshot) {
-            restoreState(bestSnapshot);
-        }
+        this.schedule.forEach((entry, entryIndex) => {
+            if (entry.skipStaffing) return;
+
+            if (!entry.positions.toddler2LeadTeacher) {
+                fillSlotFromOptions(entryIndex, 'toddler2LeadTeacher', rankPool(toddler2Order, entry));
+            }
+
+            const preKKeys = [];
+            if (!entry.positions.preK1LeadTeacher) preKKeys.push('preK1LeadTeacher');
+            if (!entry.positions.preK2LeadTeacher) preKKeys.push('preK2LeadTeacher');
+            if (preKKeys.length === 0) return;
+
+            const preKOptions = rankPool(preKPool, entry);
+            preKKeys.forEach((key) => {
+                fillSlotFromOptions(entryIndex, key, preKOptions);
+            });
+        });
     }
 
     /**
@@ -1456,9 +1429,24 @@ class QuarterlyScheduler {
      * Includes strict spouse same-week co-scheduling and preference-aware candidate weighting.
      */
     fillRemainingPositions(fillOrder, fillCycle) {
+        let spousePlaceFailed = new Set();
+
+        const remainingGeneralCapacity = (entry) => {
+            const p = entry.positions;
+            let open = 0;
+            if (!p.checkInCoordinator) open += 1;
+            open += Math.max(0, 3 - (p.crawlers || []).length);
+            open += Math.max(0, 2 - (p.toddler1 || []).length);
+            open += Math.max(0, 2 - (p.toddler2 || []).length);
+            open += Math.max(0, 2 - (p.preK1 || []).length);
+            open += Math.max(0, 2 - (p.preK2 || []).length);
+            return open;
+        };
+
         const canFillGeneral = (vol, scheduleEntry, positionKey, scheduled) => {
             if (!vol) return false;
             if (scheduled.has(vol.name)) return false;
+            if (spousePlaceFailed.has(vol.name)) return false;
             if (!this.positionAllowedByPreference(vol, positionKey)) return false;
             if (!this.canPlaceVolunteerOnDate(vol, scheduleEntry.date, { purpose: 'algorithm' })) return false;
             if (vol.spouse) {
@@ -1474,6 +1462,7 @@ class QuarterlyScheduler {
         };
 
         const pickGeneral = (pool, startIndex, scheduleEntry, positionKey, scheduled, softCap = null) => {
+            const remaining = remainingGeneralCapacity(scheduleEntry);
             const candidates = [];
             for (let i = 0; i < pool.length; i++) {
                 const vol = pool[i];
@@ -1481,6 +1470,8 @@ class QuarterlyScheduler {
                 const usage = this.volunteerUsage[vol.name] || { count: 0, cycles: 0 };
                 if (Number.isFinite(softCap) && usage.count >= softCap) continue;
                 const distance = i >= startIndex ? i - startIndex : (pool.length - startIndex) + i;
+                const isCouple = !!vol.spouse;
+                const couplePrefer = remaining >= 2 ? (isCouple ? 0 : 1) : (isCouple ? 1 : 0);
                 candidates.push({
                     vol,
                     index: i,
@@ -1488,6 +1479,7 @@ class QuarterlyScheduler {
                     cycles: usage.cycles,
                     prefWeight: preferenceWeight(vol),
                     neverUsed: usage.count === 0 ? 0 : 1,
+                    couplePrefer,
                     spouseUsage: vol.spouse && this.volunteerUsage[vol.spouse]
                         ? this.volunteerUsage[vol.spouse].count
                         : 0,
@@ -1498,6 +1490,7 @@ class QuarterlyScheduler {
             candidates.sort((a, b) => {
                 if (a.usageCount !== b.usageCount) return a.usageCount - b.usageCount;
                 if (a.neverUsed !== b.neverUsed) return a.neverUsed - b.neverUsed;
+                if (a.couplePrefer !== b.couplePrefer) return a.couplePrefer - b.couplePrefer;
                 if (a.spouseUsage !== b.spouseUsage) return a.spouseUsage - b.spouseUsage;
                 if (a.prefWeight !== b.prefWeight) return a.prefWeight - b.prefWeight;
                 if (a.cycles !== b.cycles) return a.cycles - b.cycles;
@@ -1511,6 +1504,7 @@ class QuarterlyScheduler {
             if (scheduleEntry.skipStaffing) return;
 
             const scheduled = new Set();
+            spousePlaceFailed = new Set();
 
             const collect = () => {
                 scheduled.clear();
@@ -1529,7 +1523,6 @@ class QuarterlyScheduler {
             collect();
 
             const tryFill = (positionKey) => {
-                // Soft cap pass first, then relaxed pass if nothing viable.
                 let pick = pickGeneral(fillOrder, generalIndex, scheduleEntry, positionKey, scheduled, 3);
                 if (!pick) pick = pickGeneral(fillOrder, generalIndex, scheduleEntry, positionKey, scheduled, null);
                 if (!pick) return null;
@@ -1542,74 +1535,81 @@ class QuarterlyScheduler {
                 return pick.vol;
             };
 
+            const unassignGeneral = (positionKey, name) => {
+                const p = scheduleEntry.positions;
+                if (positionKey === 'checkInCoordinator') {
+                    if (p.checkInCoordinator === name) p.checkInCoordinator = null;
+                } else {
+                    const idx = p[positionKey].indexOf(name);
+                    if (idx !== -1) p[positionKey].splice(idx, 1);
+                }
+                this.removeVolunteerUsage(name, scheduleEntry.date);
+                scheduled.delete(name);
+            };
+
+            const assignWithSpouse = (v, positionKey) => {
+                const p = scheduleEntry.positions;
+                if (positionKey === 'checkInCoordinator') {
+                    p.checkInCoordinator = v.name;
+                } else {
+                    p[positionKey].push(v.name);
+                }
+                this.recordVolunteerUsage(v.name, scheduleEntry.date);
+                scheduled.add(v.name);
+
+                if (!v.spouse) return true;
+                const spousePlaced = this.scheduleSpouseOnSameDateStrict(
+                    v.spouse,
+                    scheduleEntry,
+                    scheduled,
+                    positionKey
+                );
+                if (spousePlaced) return true;
+
+                unassignGeneral(positionKey, v.name);
+                spousePlaceFailed.add(v.name);
+                spousePlaceFailed.add(v.spouse);
+                return false;
+            };
+
             if (!scheduleEntry.positions.checkInCoordinator) {
                 let attempts = 0;
                 while (!scheduleEntry.positions.checkInCoordinator && attempts < fillOrder.length) {
                     attempts++;
                     const v = tryFill('checkInCoordinator');
                     if (!v) break;
-                    if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'checkInCoordinator')) {
-                        continue;
-                    }
-                    scheduleEntry.positions.checkInCoordinator = v.name;
-                    this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                    scheduled.add(v.name);
+                    assignWithSpouse(v, 'checkInCoordinator');
                 }
             }
 
             while (scheduleEntry.positions.crawlers.length < 3) {
                 const v = tryFill('crawlers');
                 if (!v) break;
-                if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'crawlers')) {
-                    continue;
-                }
-                scheduleEntry.positions.crawlers.push(v.name);
-                this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                scheduled.add(v.name);
+                if (!assignWithSpouse(v, 'crawlers')) continue;
             }
 
             while (scheduleEntry.positions.toddler1.length < 2) {
                 const v = tryFill('toddler1');
                 if (!v) break;
-                if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'toddler1')) {
-                    continue;
-                }
-                scheduleEntry.positions.toddler1.push(v.name);
-                this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                scheduled.add(v.name);
+                if (!assignWithSpouse(v, 'toddler1')) continue;
             }
 
             while (scheduleEntry.positions.toddler2.length < 2) {
                 const v = tryFill('toddler2');
                 if (!v) break;
-                if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'toddler2')) {
-                    continue;
-                }
-                scheduleEntry.positions.toddler2.push(v.name);
-                this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                scheduled.add(v.name);
+                if (!assignWithSpouse(v, 'toddler2')) continue;
             }
 
             while (scheduleEntry.positions.preK1.length < 2) {
                 const v = tryFill('preK1');
                 if (!v) break;
-                if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'preK1')) {
-                    continue;
-                }
-                scheduleEntry.positions.preK1.push(v.name);
-                this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                scheduled.add(v.name);
+                if (!assignWithSpouse(v, 'preK1')) continue;
             }
 
             while (scheduleEntry.positions.preK2.length < 2) {
                 const v = tryFill('preK2');
                 if (!v) break;
-                if (v.spouse && !this.scheduleSpouseOnSameDateStrict(v.spouse, scheduleEntry, scheduled, 'preK2')) {
-                    continue;
-                }
-                scheduleEntry.positions.preK2.push(v.name);
-                this.recordVolunteerUsage(v.name, scheduleEntry.date);
-                scheduled.add(v.name);
+                if (!assignWithSpouse(v, 'preK2')) continue;
             }
         });
     }
@@ -1617,8 +1617,11 @@ class QuarterlyScheduler {
     rebalanceGeneralPoolNoSpouse(maxIterations = 150) {
         const generalKeys = ['checkInCoordinator', 'crawlers', 'toddler1', 'toddler2', 'preK1', 'preK2'];
         const getVolunteer = (name) => this.volunteers.find((v) => v.name === name);
+        const isLeadVolunteer = (vol) =>
+            !!vol && (vol.isToddlerLeadTeacher || this.isAnyPreKLeadVolunteer(vol));
         const isEligibleRecipient = (vol, scheduleEntry, positionKey) => {
             if (!vol || vol.spouse) return false;
+            if (isLeadVolunteer(vol)) return false;
             if (this.infeasibleVolunteers[vol.name]) return false;
             if (this.isVolunteerNameOnEntry(vol.name, scheduleEntry)) return false;
             if (!this.positionAllowedByPreference(vol, positionKey)) return false;
@@ -1635,14 +1638,14 @@ class QuarterlyScheduler {
             const usageEntries = Object.entries(this.volunteerUsage)
                 .filter(([name, usage]) => {
                     const v = getVolunteer(name);
-                    return v && !v.spouse && !this.infeasibleVolunteers[name] && usage.count > 0;
+                    return v && !v.spouse && !isLeadVolunteer(v) && !this.infeasibleVolunteers[name] && usage.count > 0;
                 })
                 .sort((a, b) => b[1].count - a[1].count);
 
             const lowUsageEntries = Object.entries(this.volunteerUsage)
                 .filter(([name]) => {
                     const v = getVolunteer(name);
-                    return v && !v.spouse && !this.infeasibleVolunteers[name];
+                    return v && !v.spouse && !isLeadVolunteer(v) && !this.infeasibleVolunteers[name];
                 })
                 .sort((a, b) => a[1].count - b[1].count);
 
@@ -1828,7 +1831,7 @@ class QuarterlyScheduler {
             html += `<p><strong>Best attempt:</strong> #${this.lastGenerationResult.bestIndex + 1} (${this.lastGenerationResult.bestScore.total.toFixed(1)}%)</p>`;
             html += '<ul class="top-attempts-list">';
             this.lastGenerationResult.topRuns.forEach((run, idx) => {
-                html += `<li>#${idx + 1}: attempt ${run.index + 1} - ${run.score.total.toFixed(1)}% (viol ${run.score.violationScore.toFixed(1)}, fair ${run.score.fairnessScore.toFixed(1)}, pref ${run.score.preferenceScore.toFixed(1)}, gap ${run.score.gapQualityScore.toFixed(1)})</li>`;
+                html += `<li>#${idx + 1}: attempt ${run.index + 1} - ${run.score.total.toFixed(1)}% (viol ${run.score.violationScore.toFixed(1)}, fair ${run.score.fairnessScore.toFixed(1)}, pref ${run.score.preferenceScore.toFixed(1)}, gap ${run.score.gapQualityScore.toFixed(1)}, blanks ${run.score.blankCount || 0})</li>`;
             });
             html += '</ul>';
             html += '</div>';
