@@ -10,7 +10,10 @@
     <div class="container">
         <header>
             <h1>Avenue Volunteer Schedule Generator</h1>
-            <p class="subtitle">Blockout dates (exact Sunday) and minimum weeks between assignments (leads / fill)</p>
+            <ul class="version-list">
+                <li><span class="version">1.0.03</span> <span class="version-note">Fix volunteer list upload click</span></li>
+                <li><span class="version">1.0.02</span> <span class="version-note">Bare Future dates fail at parse</span></li>
+            </ul>
         </header>
 
         <main>
@@ -71,7 +74,7 @@
                         <li>Pre-K 2: 2</li>
                     </ul>
                     <p class="file-hint" style="margin-top: 0.75rem;">Optional columns: Pre-K 1 Lead, Pre-K 2 Lead (pipe-delimited). Legacy &quot;Pre-K Lead&quot; counts as both.</p>
-                    <p class="file-hint" style="margin-top: 0.75rem;">Blockout/blackout column: that Sunday only (adjacent Sundays stay eligible). Future-dated assignments from the file still apply unless that Sunday is blocked out.</p>
+                    <p class="file-hint" style="margin-top: 0.75rem;">Blockout/blackout column: that Sunday only (adjacent Sundays stay eligible). Future column: date|room (or date:room). A date with no room is a parse issue, not a blockout. Future pins still apply unless that Sunday is blocked out.</p>
                 </div>
             </section>
 

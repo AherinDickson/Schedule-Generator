@@ -21,6 +21,8 @@ class QuarterlyScheduler {
         this.skipSundayDateKeys = new Set();
         /** Warnings when volunteer file future rows target a skip-Sunday (built each generate). */
         this.futureOnSkippedWarnings = [];
+        /** File parse issues from the last volunteer upload (not schedule violations). */
+        this.parseIssues = [];
         this.initializeEventListeners();
     }
 
@@ -355,6 +357,7 @@ class QuarterlyScheduler {
                 : this.parsePipeDelimitedFile(text);
             if (this.volunteers.length === 0) throw new Error('No volunteers found in file');
             fileInfo.innerHTML += `<p class="success">✅ Successfully loaded ${this.volunteers.length} volunteer(s)</p>`;
+            fileInfo.innerHTML += this.renderParseIssuesHtml();
             generateBtn.disabled = false;
         } catch (error) {
             fileInfo.innerHTML += `<p class="error">❌ Error: ${error.message}</p>`;
@@ -424,8 +427,28 @@ class QuarterlyScheduler {
         return fields;
     }
 
+    addParseIssue(message) {
+        this.parseIssues.push(String(message));
+    }
+
+    renderParseIssuesHtml() {
+        const count = this.parseIssues.length;
+        if (count === 0) {
+            return `<p class="success">0 parsing issues</p>`;
+        }
+        const noun = count === 1 ? 'issue' : 'issues';
+        let html = `<p class="error">${count} parsing ${noun}</p>`;
+        html += '<ul class="parse-issues-list">';
+        this.parseIssues.forEach((issue) => {
+            html += `<li>${this.escapeHtml(issue)}</li>`;
+        });
+        html += '</ul>';
+        return html;
+    }
+
     /** Shared row parsing: splitLine extracts fields; mapping is delimiter-agnostic. */
     parseDelimitedRows(text, splitLine) {
+        this.parseIssues = [];
         const lines = text.split('\n').filter(line => line.trim());
         if (lines.length < 2) return [];
 
@@ -473,19 +496,7 @@ class QuarterlyScheduler {
             } else if (header.includes('blockout') || header.includes('blackout')) {
                 volunteer.blockoutDates = this.parseDates(value, volunteer.name);
             } else if (header.includes('future')) {
-                const parsedFuture = this.parseFutureDates(value, volunteer.name);
-                volunteer.futureScheduledDates = parsedFuture.futureScheduledDates;
-                // Entries without a separator in "future" are treated as explicit blockouts.
-                if (parsedFuture.impliedBlockoutDates.length > 0) {
-                    const seen = new Set(volunteer.blockoutDates.map((d) => d.getTime()));
-                    parsedFuture.impliedBlockoutDates.forEach((d) => {
-                        const t = d.getTime();
-                        if (!seen.has(t)) {
-                            volunteer.blockoutDates.push(d);
-                            seen.add(t);
-                        }
-                    });
-                }
+                volunteer.futureScheduledDates = this.parseFutureDates(value, volunteer.name);
             } else if (header.includes('previous') || header.includes('past')) {
                 volunteer.previouslyScheduledDates = this.parseDates(value, volunteer.name);
             } else if (header.includes('position') && header.includes('preference')) {
@@ -529,16 +540,19 @@ class QuarterlyScheduler {
         dateStrings.forEach(ds => {
             const date = this.parseDate(ds);
             if (date) dates.push(date);
-            else if (volunteerName) console.warn(`Could not parse date: "${ds}" for person: ${volunteerName}`);
+            else {
+                const who = volunteerName ? `${volunteerName}: ` : '';
+                this.addParseIssue(`${who}Could not parse date "${ds}". Entry ignored.`);
+            }
         });
         return dates;
     }
 
     parseFutureDates(dateString, volunteerName = null) {
-        if (!dateString) return { futureScheduledDates: [], impliedBlockoutDates: [] };
+        if (!dateString) return [];
         const items = dateString.split(/[,;\n\r]+/).map(i => i.trim()).filter(i => i.length > 0);
         const futureScheduledDates = [];
-        const impliedBlockoutDates = [];
+        const who = volunteerName ? `${volunteerName}: ` : '';
         items.forEach(item => {
             const separatorMatch = item.match(/^(.+?)[:|](.+)$/);
             if (separatorMatch) {
@@ -547,22 +561,15 @@ class QuarterlyScheduler {
                 const date = this.parseDate(dateStr);
                 if (date && position) futureScheduledDates.push({ date, position });
                 else {
-                    const nameInfo = volunteerName ? ` for person: ${volunteerName}` : '';
-                    console.warn(`Could not parse future date entry: "${item}"${nameInfo}`);
+                    this.addParseIssue(`${who}Could not parse future date entry "${item}". Entry ignored.`);
                 }
             } else {
-                const date = this.parseDate(item);
-                if (date) {
-                    impliedBlockoutDates.push(date);
-                } else {
-                    const nameInfo = volunteerName ? ` for person: ${volunteerName}` : '';
-                    console.warn(
-                        `Could not parse future date entry (missing separator, not a valid date): "${item}"${nameInfo}`
-                    );
-                }
+                this.addParseIssue(
+                    `${who}Future "${item}" has no position (need date|room). Entry ignored.`
+                );
             }
         });
-        return { futureScheduledDates, impliedBlockoutDates };
+        return futureScheduledDates;
     }
 
     parsePositionPreferences(prefString) {
