@@ -1,0 +1,21 @@
+---
+description: Bump the site version list whenever this project changes
+alwaysApply: true
+---
+
+# Version list
+
+After any change that ships in this project (scheduler behavior, UI, file format, constraints), update the version list in `index.html` before you finish.
+
+- Newest version is the **first** `<li>` in `ul.version-list`.
+- Scheme: `1.0.01`, then `1.0.02`, `1.0.03`, … (increment the last segment).
+- Put a short blurb in `<span class="version-note">` next to the new version. One phrase is enough.
+- `1.0.01` has no blurb. Leave it that way.
+- Keep **only the newest two** entries. When `1.0.03` is added, drop `1.0.01`. Same after that: current plus previous, oldest falls off.
+
+```html
+<li><span class="version">1.0.03</span> <span class="version-note">Short blurb for this change</span></li>
+<li><span class="version">1.0.02</span> <span class="version-note">Bare Future dates fail at parse</span></li>
+```
+
+Skip the bump for docs-only, comments, or the version list itself.

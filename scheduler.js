@@ -363,6 +363,8 @@ class QuarterlyScheduler {
             fileInfo.innerHTML += `<p class="success">✅ Successfully loaded ${this.volunteers.length} volunteer(s)</p>`;
             if (warningCount > 0) {
                 fileInfo.innerHTML += `<p class="warning">${warningCount} parse warning(s). Skipped values are listed below.</p>`;
+            } else {
+                fileInfo.innerHTML += `<p class="success">0 parsing issues</p>`;
             }
             this.displayImportWarnings();
             generateBtn.disabled = false;
@@ -481,6 +483,25 @@ class QuarterlyScheduler {
         return fields;
     }
 
+    addParseIssue(message) {
+        this.parseIssues.push(String(message));
+    }
+
+    renderParseIssuesHtml() {
+        const count = this.parseIssues.length;
+        if (count === 0) {
+            return `<p class="success">0 parsing issues</p>`;
+        }
+        const noun = count === 1 ? 'issue' : 'issues';
+        let html = `<p class="error">${count} parsing ${noun}</p>`;
+        html += '<ul class="parse-issues-list">';
+        this.parseIssues.forEach((issue) => {
+            html += `<li>${this.escapeHtml(issue)}</li>`;
+        });
+        html += '</ul>';
+        return html;
+    }
+
     /** Shared row parsing: splitLine extracts fields; mapping is delimiter-agnostic. */
     parseDelimitedRows(text, splitLine) {
         const lines = String(text).split('\n');
@@ -572,17 +593,6 @@ class QuarterlyScheduler {
                 const parsedFuture = this.parseFutureDates(value);
                 volunteer.futureScheduledDates = parsedFuture.futureScheduledDates;
                 pushParseErrors(fieldLabel(index, header), parsedFuture.errors);
-                // Entries without a separator in "future" are treated as explicit blockouts.
-                if (parsedFuture.impliedBlockoutDates.length > 0) {
-                    const seen = new Set(volunteer.blockoutDates.map((d) => d.getTime()));
-                    parsedFuture.impliedBlockoutDates.forEach((d) => {
-                        const t = d.getTime();
-                        if (!seen.has(t)) {
-                            volunteer.blockoutDates.push(d);
-                            seen.add(t);
-                        }
-                    });
-                }
             } else if (header.includes('previous') || header.includes('past')) {
                 const parsed = this.parseDates(value);
                 volunteer.previouslyScheduledDates = parsed.dates;
@@ -635,10 +645,9 @@ class QuarterlyScheduler {
     }
 
     parseFutureDates(dateString) {
-        if (!dateString) return { futureScheduledDates: [], impliedBlockoutDates: [], errors: [] };
+        if (!dateString) return { futureScheduledDates: [], errors: [] };
         const items = dateString.split(/[,;\n\r]+/).map(i => i.trim()).filter(i => i.length > 0);
         const futureScheduledDates = [];
-        const impliedBlockoutDates = [];
         const errors = [];
         items.forEach(item => {
             const separatorMatch = item.match(/^(.+?)[:|](.+)$/);
@@ -649,15 +658,10 @@ class QuarterlyScheduler {
                 if (date && position) futureScheduledDates.push({ date, position });
                 else errors.push({ value: item, reason: 'Future entry missing position or invalid date' });
             } else {
-                const date = this.parseDate(item);
-                if (date) {
-                    impliedBlockoutDates.push(date);
-                } else {
-                    errors.push({ value: item, reason: 'Future entry missing position or invalid date' });
-                }
+                errors.push({ value: item, reason: 'Future entry has no position (need date|room)' });
             }
         });
-        return { futureScheduledDates, impliedBlockoutDates, errors };
+        return { futureScheduledDates, errors };
     }
 
     parsePositionPreferences(prefString) {
