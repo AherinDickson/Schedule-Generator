@@ -483,25 +483,6 @@ class QuarterlyScheduler {
         return fields;
     }
 
-    addParseIssue(message) {
-        this.parseIssues.push(String(message));
-    }
-
-    renderParseIssuesHtml() {
-        const count = this.parseIssues.length;
-        if (count === 0) {
-            return `<p class="success">0 parsing issues</p>`;
-        }
-        const noun = count === 1 ? 'issue' : 'issues';
-        let html = `<p class="error">${count} parsing ${noun}</p>`;
-        html += '<ul class="parse-issues-list">';
-        this.parseIssues.forEach((issue) => {
-            html += `<li>${this.escapeHtml(issue)}</li>`;
-        });
-        html += '</ul>';
-        return html;
-    }
-
     /** Shared row parsing: splitLine extracts fields; mapping is delimiter-agnostic. */
     parseDelimitedRows(text, splitLine) {
         const lines = String(text).split('\n');
