@@ -21,6 +21,8 @@ class QuarterlyScheduler {
         this.skipSundayDateKeys = new Set();
         /** Warnings when volunteer file future rows target a skip-Sunday (built each generate). */
         this.futureOnSkippedWarnings = [];
+        /** Date/future parse failures from the last volunteer file upload. */
+        this.importWarnings = [];
         this.initializeEventListeners();
     }
 
@@ -323,6 +325,7 @@ class QuarterlyScheduler {
         const fileInfo = document.getElementById('fileInfo');
         const generateBtn = document.getElementById('generateBtn');
 
+        this.clearImportWarnings();
         fileInfo.classList.remove('hidden');
         fileInfo.innerHTML = `<p>📄 ${file.name} (${(file.size / 1024).toFixed(2)} KB)</p>`;
 
@@ -350,17 +353,71 @@ class QuarterlyScheduler {
 
         try {
             const text = await file.text();
-            this.volunteers = isCsv
+            const parsed = isCsv
                 ? this.parseCSVFile(text)
                 : this.parsePipeDelimitedFile(text);
+            this.volunteers = parsed.volunteers;
+            this.importWarnings = parsed.warnings || [];
             if (this.volunteers.length === 0) throw new Error('No volunteers found in file');
+            const warningCount = this.importWarnings.length;
             fileInfo.innerHTML += `<p class="success">✅ Successfully loaded ${this.volunteers.length} volunteer(s)</p>`;
+            if (warningCount > 0) {
+                fileInfo.innerHTML += `<p class="warning">${warningCount} parse warning(s). Skipped values are listed below.</p>`;
+            }
+            this.displayImportWarnings();
             generateBtn.disabled = false;
         } catch (error) {
             fileInfo.innerHTML += `<p class="error">❌ Error: ${error.message}</p>`;
             this.volunteers = [];
+            this.clearImportWarnings();
             generateBtn.disabled = true;
         }
+    }
+
+    clearImportWarnings() {
+        this.importWarnings = [];
+        const el = document.getElementById('importWarnings');
+        if (!el) return;
+        el.innerHTML = '';
+        el.classList.add('hidden');
+    }
+
+    displayImportWarnings() {
+        const el = document.getElementById('importWarnings');
+        if (!el) return;
+        const warnings = this.importWarnings || [];
+        if (warnings.length === 0) {
+            el.innerHTML = '';
+            el.classList.add('hidden');
+            return;
+        }
+        const rows = warnings.map((w) => {
+            return `<tr>
+                <td>${this.escapeHtml(String(w.line ?? ''))}</td>
+                <td>${this.escapeHtml(w.name || '')}</td>
+                <td>${this.escapeHtml(w.field || '')}</td>
+                <td>${this.escapeHtml(w.value || '')}</td>
+                <td>${this.escapeHtml(w.reason || '')}</td>
+            </tr>`;
+        }).join('');
+        el.classList.remove('hidden');
+        el.innerHTML = `
+            <h3>Parse warnings (${warnings.length})</h3>
+            <div class="import-warnings-table-wrap">
+                <table class="import-warnings-table">
+                    <thead>
+                        <tr>
+                            <th>Line</th>
+                            <th>Name</th>
+                            <th>Field</th>
+                            <th>Value</th>
+                            <th>Issue</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
     }
 
     inferQuarterYearFromFilename(filename) {
@@ -426,23 +483,38 @@ class QuarterlyScheduler {
 
     /** Shared row parsing: splitLine extracts fields; mapping is delimiter-agnostic. */
     parseDelimitedRows(text, splitLine) {
-        const lines = text.split('\n').filter(line => line.trim());
-        if (lines.length < 2) return [];
-
-        const headers = splitLine(lines[0]).map(h => h.trim().toLowerCase());
+        const lines = String(text).split('\n');
         const volunteers = [];
+        const warnings = [];
+        let headers = null;
+        let originalHeaders = null;
 
-        for (let i = 1; i < lines.length; i++) {
-            const values = splitLine(lines[i]).map(v => v.trim());
+        for (let i = 0; i < lines.length; i++) {
+            const raw = lines[i].replace(/\r$/, '');
+            if (!raw.trim()) continue;
+
+            if (!headers) {
+                originalHeaders = splitLine(raw).map((h) => h.trim());
+                headers = originalHeaders.map((h) => h.toLowerCase());
+                continue;
+            }
+
+            const values = splitLine(raw).map((v) => v.trim());
             if (values.length === 0 || !values[0]) continue;
 
-            const volunteer = this.buildVolunteerFromFields(headers, values);
+            const { volunteer, warnings: rowWarnings } = this.buildVolunteerFromFields(
+                headers,
+                originalHeaders,
+                values,
+                i + 1
+            );
+            warnings.push(...rowWarnings);
             if (volunteer.name) volunteers.push(volunteer);
         }
-        return volunteers;
+        return { volunteers, warnings };
     }
 
-    buildVolunteerFromFields(headers, values) {
+    buildVolunteerFromFields(headers, originalHeaders, values, lineNumber) {
         const volunteer = {
             name: '',
             spouse: '',
@@ -455,11 +527,33 @@ class QuarterlyScheduler {
             previouslyScheduledDates: [],
             positionPreferences: []
         };
+        const warnings = [];
+        const isNameHeader = (header) => header.includes('name') || header.includes('volunteer');
+        const fieldLabel = (index, header) => {
+            const original = (originalHeaders[index] || '').trim();
+            return original || header;
+        };
+        const pushParseErrors = (field, errors) => {
+            errors.forEach((err) => {
+                warnings.push({
+                    line: lineNumber,
+                    name: volunteer.name,
+                    field,
+                    value: err.value,
+                    reason: err.reason
+                });
+            });
+        };
+
+        const nameIndex = headers.findIndex(isNameHeader);
+        if (nameIndex >= 0) {
+            volunteer.name = (values[nameIndex] || '').trim();
+        }
 
         headers.forEach((header, index) => {
             const value = (values[index] || '').trim();
-            if (header.includes('name') || header.includes('volunteer')) {
-                volunteer.name = value;
+            if (isNameHeader(header)) {
+                return;
             } else if (header.includes('spouse')) {
                 volunteer.spouse = value;
             } else if (this.headerIsPreK1Lead(header)) {
@@ -471,10 +565,13 @@ class QuarterlyScheduler {
             } else if (header.includes('pre') && (header.includes('k') || header.includes('k-')) && header.includes('lead')) {
                 volunteer.isPreKLeadTeacher = this.parseBoolean(value);
             } else if (header.includes('blockout') || header.includes('blackout')) {
-                volunteer.blockoutDates = this.parseDates(value, volunteer.name);
+                const parsed = this.parseDates(value);
+                volunteer.blockoutDates = parsed.dates;
+                pushParseErrors(fieldLabel(index, header), parsed.errors);
             } else if (header.includes('future')) {
-                const parsedFuture = this.parseFutureDates(value, volunteer.name);
+                const parsedFuture = this.parseFutureDates(value);
                 volunteer.futureScheduledDates = parsedFuture.futureScheduledDates;
+                pushParseErrors(fieldLabel(index, header), parsedFuture.errors);
                 // Entries without a separator in "future" are treated as explicit blockouts.
                 if (parsedFuture.impliedBlockoutDates.length > 0) {
                     const seen = new Set(volunteer.blockoutDates.map((d) => d.getTime()));
@@ -487,13 +584,15 @@ class QuarterlyScheduler {
                     });
                 }
             } else if (header.includes('previous') || header.includes('past')) {
-                volunteer.previouslyScheduledDates = this.parseDates(value, volunteer.name);
+                const parsed = this.parseDates(value);
+                volunteer.previouslyScheduledDates = parsed.dates;
+                pushParseErrors(fieldLabel(index, header), parsed.errors);
             } else if (header.includes('position') && header.includes('preference')) {
                 volunteer.positionPreferences = this.parsePositionPreferences(value);
             }
         });
 
-        return volunteer;
+        return { volunteer, warnings };
     }
 
     headerIsPreK1Lead(header) {
@@ -522,23 +621,25 @@ class QuarterlyScheduler {
         return lower === 'true' || lower === 'yes' || lower === '1' || lower === 'y';
     }
 
-    parseDates(dateString, volunteerName = null) {
-        if (!dateString) return [];
+    parseDates(dateString) {
+        if (!dateString) return { dates: [], errors: [] };
         const dateStrings = dateString.split(/[,;\n\r]+/).map(d => d.trim()).filter(d => d.length > 0);
         const dates = [];
+        const errors = [];
         dateStrings.forEach(ds => {
             const date = this.parseDate(ds);
             if (date) dates.push(date);
-            else if (volunteerName) console.warn(`Could not parse date: "${ds}" for person: ${volunteerName}`);
+            else errors.push({ value: ds, reason: 'Could not parse date' });
         });
-        return dates;
+        return { dates, errors };
     }
 
-    parseFutureDates(dateString, volunteerName = null) {
-        if (!dateString) return { futureScheduledDates: [], impliedBlockoutDates: [] };
+    parseFutureDates(dateString) {
+        if (!dateString) return { futureScheduledDates: [], impliedBlockoutDates: [], errors: [] };
         const items = dateString.split(/[,;\n\r]+/).map(i => i.trim()).filter(i => i.length > 0);
         const futureScheduledDates = [];
         const impliedBlockoutDates = [];
+        const errors = [];
         items.forEach(item => {
             const separatorMatch = item.match(/^(.+?)[:|](.+)$/);
             if (separatorMatch) {
@@ -546,23 +647,17 @@ class QuarterlyScheduler {
                 const position = separatorMatch[2].trim();
                 const date = this.parseDate(dateStr);
                 if (date && position) futureScheduledDates.push({ date, position });
-                else {
-                    const nameInfo = volunteerName ? ` for person: ${volunteerName}` : '';
-                    console.warn(`Could not parse future date entry: "${item}"${nameInfo}`);
-                }
+                else errors.push({ value: item, reason: 'Future entry missing position or invalid date' });
             } else {
                 const date = this.parseDate(item);
                 if (date) {
                     impliedBlockoutDates.push(date);
                 } else {
-                    const nameInfo = volunteerName ? ` for person: ${volunteerName}` : '';
-                    console.warn(
-                        `Could not parse future date entry (missing separator, not a valid date): "${item}"${nameInfo}`
-                    );
+                    errors.push({ value: item, reason: 'Future entry missing position or invalid date' });
                 }
             }
         });
-        return { futureScheduledDates, impliedBlockoutDates };
+        return { futureScheduledDates, impliedBlockoutDates, errors };
     }
 
     parsePositionPreferences(prefString) {
