@@ -118,6 +118,58 @@ section h2 {
     margin-top: 0.5rem;
 }
 
+.file-info .warning {
+    color: var(--error-color);
+    margin-top: 0.5rem;
+}
+
+.import-warnings {
+    margin-top: 1rem;
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    border-left: 4px solid var(--error-color);
+    background: rgba(241, 125, 82, 0.12);
+}
+
+.import-warnings h3 {
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+}
+
+.import-warnings-table-wrap {
+    overflow-x: auto;
+}
+
+.import-warnings-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.import-warnings-table th,
+.import-warnings-table td {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
+}
+
+.import-warnings-table th {
+    color: var(--text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.import-warnings-table td {
+    color: var(--text-secondary);
+}
+
+.import-warnings-table td:nth-child(4) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-primary);
+}
+
 /* Settings Section */
 .settings-grid {
     display: grid;
